@@ -1,11 +1,11 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g
+from flask import Flask, render_template, request, flash, redirect, session, g, url_for
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, EditUserForm
-from models import db, connect_db, User, Message, Follows
+from models import db, connect_db, User, Message, Follows, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -19,7 +19,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ECHO'] = False
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 toolbar = DebugToolbarExtension(app)
 
@@ -302,6 +302,43 @@ def messages_destroy(message_id):
 
     return redirect(f"/users/{g.user.id}")
 
+##############################################################################
+# Likes routes:
+@app.route('/users/add_like/<int:message_id>', methods=['GET', 'POST'])
+def message_like(message_id):
+    '''Toggles likes on posts & redirects to /users/<user.id>/likes'''
+    if not g.user:
+        flash("Access unauthorized", "danger")
+        return redirect("/")
+    
+    like_ids = {l.message_id for l in (Likes.query.filter(Likes.user_id == g.user.id).all())}
+
+    if(message_id in like_ids):
+        this_like = Likes.query.filter(Likes.message_id == message_id).first()
+        db.session.delete(this_like)
+
+    else:
+        new_like = Likes(user_id = g.user.id, message_id = message_id)
+        db.session.add(new_like)
+    
+    db.session.commit()
+    return redirect(f'/users/{g.user.id}/likes')
+
+@app.route('/users/<int:user_id>/likes')
+def show_likes(user_id):
+    '''Shows the user all their liked posts'''
+    like_ids = {l.message_id for l in (Likes.query.filter(Likes.user_id == user_id).all())}
+
+    user=User.query.get_or_404(user_id)
+    messages = (Message
+                .query
+                .filter(Message.id.in_(like_ids))
+                .order_by(Message.timestamp.desc())
+                .limit(100)
+                .all())
+    
+    return render_template('users/likes.html', user=user, messages=messages, likes=like_ids)
+
 
 ##############################################################################
 # Homepage and error pages
@@ -329,8 +366,8 @@ def homepage():
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
-        
-        return render_template('home.html', messages=messages)
+        like_ids = {l.message_id for l in (Likes.query.filter(Likes.user_id == g.user.id).all())}
+        return render_template('home.html', messages=messages, likes=like_ids)
 
     else:
         return render_template('home-anon.html')
