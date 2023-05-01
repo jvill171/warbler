@@ -62,22 +62,40 @@ class UserViewTestCase(TestCase):
         
 
         db.session.commit()
-##############################################################################
-# Test routes as a guest (not logged in)
-    def test_list_users_guest(self):
-        """Is a list of all users shown? (guest)"""
+        
+    
+    def test_list_users(self):
+        """
+        Is a list of all users shown
+        functions the same if logged in or not
+        """
 
         with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
 
-            resp = c.get("/users")
-            html = resp.get_data(as_text=True)
+            # No search parameters
+            resp_e = c.get("/users")
+            html = resp_e.get_data(as_text=True)
 
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp_e.status_code, 200)
             # Check that all (2) test users are shown in the HTML
             self.assertIn("<p>@testuser</p>", html)
             self.assertIn("<p>@testuser1</p>", html)
             self.assertIn("<p>@testuser2</p>", html)
             
+            resp_s = c.get("/users?q=1")
+            html = resp_s.get_data(as_text=True)
+
+            self.assertEqual(resp_s.status_code, 200)
+            # Check that all (2) test users are shown in the HTML
+            self.assertNotIn("<p>@testuser</p>", html)
+            self.assertIn("<p>@testuser1</p>", html)
+            self.assertNotIn("<p>@testuser2</p>", html)
+
+##############################################################################
+# Test routes as a guest (not logged in), most routes deny user access
+
     def test_users_show_guest(self):
         """Is a the specified user's profile shown? (guest) """
 
@@ -209,3 +227,214 @@ class UserViewTestCase(TestCase):
             self.assertIn('<li><a href="/signup">Sign up</a></li>', html)
             self.assertIn('<li><a href="/login">Log in</a></li>', html)
         
+##############################################################################
+# Test routes as a logged in user
+            
+    def test_users_show_logged_in_other_profile(self):
+        """.
+        Is a the specified user's profile shown? (logged in)
+        [NOT SELF PROFILE]
+        """
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+            # Create a message for testuser
+            self.testuser.messages.append(
+                Message(text="I am logged in and messaging!")
+            )
+
+            # Create a message for testuser1
+            self.testuser1.messages.append(
+                Message(text="I am the first message from testuser1")
+            )
+            # Ensure only messages from testuser1 show up, by creating a message for testuser2
+            self.testuser2.messages.append(
+                Message(text="I am the first message from testuser2")
+            )
+            db.session.commit()
+
+            # View someone else's profile
+            resp = c.get(f"/users/{self.testuser1.id}")
+            html = resp.get_data(as_text=True)
+
+            self.assertEqual(resp.status_code, 200)
+            
+            # Ensure only messages form this user's profile show up 
+            self.assertIn("<p>I am the first message from testuser1</p>", html)
+            self.assertNotIn("<p>I am logged in and messaging!</p>", html)
+            self.assertNotIn("<p>I am the first message from testuser2</p>", html)
+            
+            # Ensure the profile is being viewed as a guest
+            self.assertNotIn('class="btn btn-outline-secondary">Edit Profile', html)
+            self.assertNotIn('<button class="btn btn-primary">Unfollow', html)
+            self.assertIn('<button class="btn btn-outline-primary">Follow', html)
+
+    def test_users_show_logged_in_self_profile(self):
+        """.
+        Is a the specified user's profile shown? (logged in)
+        [NOT SELF PROFILE]
+        """
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+            # Create a message for testuser
+            self.testuser.messages.append(
+                Message(text="I am logged in and messaging!")
+            )
+
+            # Create a message for testuser1
+            self.testuser1.messages.append(
+                Message(text="I am the first message from testuser1")
+            )
+            # Ensure only messages from testuser1 show up, by creating a message for testuser2
+            self.testuser2.messages.append(
+                Message(text="I am the first message from testuser2")
+            )
+            db.session.commit()
+
+            # View logged in user's profile
+            resp = c.get(f"/users/{self.testuser.id}")
+            html = resp.get_data(as_text=True)
+
+            self.assertEqual(resp.status_code, 200)
+            
+            # Ensure only messages form this user's profile show up 
+            self.assertIn("<p>I am logged in and messaging!</p>", html)
+            self.assertNotIn("<p>I am the first message from testuser1</p>", html)
+            self.assertNotIn("<p>I am the first message from testuser2</p>", html)
+            
+            # Ensure the profile is being viewed as a logged in user
+            self.assertIn('class="btn btn-outline-secondary">Edit Profile', html)
+            self.assertNotIn('<button class="btn btn-primary">Unfollow', html)
+            self.assertNotIn('<button class="btn btn-outline-primary">Follow', html)
+    
+    def test_show_following_logged_in_other_profile(self):
+        """Is users the another in user is following shown? (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            # Follow testuser1, but not testuser2
+            self.testuser1.following.append(self.testuser2)
+            db.session.commit()
+            
+            resp = c.get(f"/users/{self.testuser1.id}/following")
+            html = resp.get_data(as_text=True)
+
+            self.assertEqual(resp.status_code, 200)
+
+            self.assertNotIn('class="btn btn-outline-secondary">Edit Profile', html)
+
+            self.assertIn("<p>@testuser2</p>", html)
+            self.assertNotIn("<p>@testuser</p>", html)
+
+            self.assertIn('<button class="btn btn-outline-primary btn-sm">Follow</button>', html)
+            self.assertNotIn('<button class="btn btn-primary btn-sm">Unfollow</button>', html)
+
+    def test_show_following_logged_in_self(self):
+        """Is users the logged in user is following shown? (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            # Follow testuser1, but not testuser2
+            self.testuser.following.append(self.testuser1)
+            db.session.commit()
+            
+            resp = c.get(f"/users/{self.testuser.id}/following")
+            html = resp.get_data(as_text=True)
+
+            self.assertEqual(resp.status_code, 200)
+
+            self.assertIn('class="btn btn-outline-secondary">Edit Profile', html)
+
+            self.assertIn("<p>@testuser1</p>", html)
+            self.assertNotIn("<p>@testuser2</p>", html)
+
+            self.assertIn('<button class="btn btn-primary btn-sm">Unfollow</button>', html)
+    
+    def test_users_followers_logged_in_other_profile(self):
+        """Is the logged in user's followers shown? (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+            
+            
+            self.testuser1.followers.append(self.testuser2)
+            db.session.commit()
+
+            resp = c.get(f"/users/{self.testuser1.id}/followers")
+            html = resp.get_data(as_text=True)
+            
+            self.assertEqual(resp.status_code, 200)
+
+            self.assertNotIn('class="btn btn-outline-secondary">Edit Profile', html)
+
+            self.assertIn("<p>@testuser2</p>", html)
+            self.assertNotIn("<p>@testuser</p>", html)
+
+            self.assertIn('<button class="btn btn-outline-primary btn-sm">Follow</button>', html)
+
+    def test_users_followers_logged_in_self(self):
+        """Is the logged in user's followers shown? (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+            
+            
+            self.testuser.followers.append(self.testuser2)
+            db.session.commit()
+
+            resp = c.get(f"/users/{self.testuser.id}/followers")
+            html = resp.get_data(as_text=True)
+            
+            self.assertEqual(resp.status_code, 200)
+
+            self.assertIn('class="btn btn-outline-secondary">Edit Profile', html)
+
+            self.assertIn("<p>@testuser2</p>", html)
+            self.assertNotIn("<p>@testuser1</p>", html)
+
+            self.assertIn('<button class="btn btn-outline-primary btn-sm">Follow</button>', html)
+     
+    def test_add_follow_logged_in(self):
+        """Can logged in user follow someone (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            resp = c.post(f"/users/follow/{self.testuser1.id}")
+            html = resp.get_data(as_text=True)
+
+            # Check we are redirected
+            self.assertEqual(resp.status_code, 302)
+            # Check the testuser1 has successfully been followed
+            self.assertIn(self.testuser1, self.testuser.following)
+            self.assertEqual(len(self.testuser.following), 1)
+
+    def test_stop_following_logged_in(self):
+        """Can logged in user un-follow another user (logged in)"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            # Logged in user follows testuser1, should work if
+            # test_add_follow_logged_in() succeeded
+            c.post(f"/users/follow/{self.testuser1.id}")
+            
+            # Logged in user UN-follows testuser1
+            resp = c.post(f"/users/stop-following/{self.testuser1.id}")
+
+            self.assertEqual(resp.status_code, 302)
+            # Check the testuser1 has successfully been UN-followed
+            self.assertNotIn(self.testuser1, self.testuser.following)
+            self.assertEqual(len(self.testuser.following), 0)
+
