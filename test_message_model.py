@@ -1,9 +1,4 @@
-"""User model tests."""
-
-# run these tests like:
-#
-#    python -m unittest test_user_model.py
-
+"""Message model tests."""
 
 import os
 from unittest import TestCase
